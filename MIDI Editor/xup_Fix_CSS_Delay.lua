@@ -11,6 +11,8 @@ function MoveNote()
     hwnd = r.MIDIEditor_GetActive()
     take = r.MIDIEditor_GetTake(hwnd)
 
+    tick_1_14note = r.SNM_GetIntConfigVar("miditicksperbeat", -1)
+
     retval, notecnt, _, _ = r.MIDI_CountEvts(take)
     if notecnt == 0 then 
         r.MB('No notes in the MIDI item.','ERROR',0) 
@@ -21,11 +23,14 @@ function MoveNote()
         for i = 0, notecnt-1 do
             retval, sel, muted, startpos, endpos, chan, pitch, vel = r.MIDI_GetNote(take, i)
             if sel then
+                -- set edit cursor at the start of the note
                 r.SetEditCurPos(r.MIDI_GetProjTimeFromPPQPos(take, startpos), true, false)
+                
                 tempo = r.Master_GetTempo()
-                tick_1_14note = r.SNM_GetIntConfigVar("miditicksperbeat", -1)
                 ms_1_14note = 60 * 1000 / tempo
+                
                 tick1ms = tick_1_14note / ms_1_14note
+
                 posDiff = 0
                 if vel >= 0 and vel <= 64 then
                     posDiff = -333 * tick1ms
@@ -36,10 +41,12 @@ function MoveNote()
                 else
                     posDiff = 0
                 end
+
                 newStartPos = startpos + posDiff
                 if newStartPos < 0 then
                     newStartPos = 0
                 end
+                
                 r.MIDI_SetNote(take, i, sel, muted, newStartPos, endpos, chan, pitch, vel) 
             end
         end
@@ -47,15 +54,15 @@ function MoveNote()
 end
 
 
-function main() -- local (i, j, item, take, track)
-    r.Undo_BeginBlock() -- Begining of the undo block. Leave it at the top of your main function.
+function main()
+    r.Undo_BeginBlock()
     MoveNote()
-    r.Undo_EndBlock("Fix CSS Delay", 0) -- End of the undo block. Leave it at the bottom of your main function.
-end -- end main()
+    r.Undo_EndBlock("Fix CSS Delay", 0)
+end
 
 r.PreventUIRefresh(1) -- Prevent UI refreshing. Uncomment it only if the script works.
 
-main() -- Execute your main function
+main()
 
 r.TrackList_AdjustWindows(false)
 
