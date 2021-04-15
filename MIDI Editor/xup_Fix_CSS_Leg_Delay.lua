@@ -1,5 +1,5 @@
 --[[ 
-* ReaScript Name:Fix CSS Delay. 
+* ReaScript Name:Fix CSS Leg Delay. 
 * Version: 2021/04/15 
 * Author: xupeng 
 * link: https://github.com/xupeng1206
@@ -57,7 +57,7 @@ end
 function main()
     r.Undo_BeginBlock()
     MoveNote()
-    r.Undo_EndBlock("Fix CSS Delay", 0)
+    r.Undo_EndBlock("Fix CSS Leg Delay", 0)
 end
 
 r.PreventUIRefresh(1) -- Prevent UI refreshing. Uncomment it only if the script works.
