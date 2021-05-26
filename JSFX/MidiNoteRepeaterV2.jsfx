@@ -85,7 +85,7 @@ a_NotesOut        = a_NotesPressed + NUM_NOTES * i_NotesPressedBit;
 memset(a_NotesOut, 0, NUM_NOTES * i_NotesOutBit);
 
 @slider
-i_noteStart = 12*slider1
+i_noteStart = 12*slider1;
 i_AT = slider4;
 i_gate = slider5 / 100;
 
