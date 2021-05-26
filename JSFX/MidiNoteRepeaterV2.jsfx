@@ -40,6 +40,22 @@ Potential Addition:
   2. Aftertouch %.
   3. Native CC sliders.
   4. Work with pause play_state.
+  
+C - > 1/4
+D - > 1/8
+E - > Retrigger
+F - > 1/16
+G - > 1/32
+A - > 1/64
+
+C# - > 1/4T
+D# - > 1/8T
+F# - > 1/16T
+G# - > 1/32T
+A# - > 1/64T
+
+B -> Trigger D
+
 */
 
 desc:MIDI Note Beat Repeater
@@ -48,7 +64,7 @@ desc:MIDI Note Beat Repeater
 // slider1:5<0,9,1{4,2,1,1/2,1/4,1/8,1/16,1/32,1/64,1/128}>Rate (fraction of whole note)
 // slider2:0<0,2,1{NORMAL,TRIPLET,DOTTED}>Type
 slider1:2<0,3,1{C-1,C0,C1,C2}> Start Note
-slider3:2<0,4,1{off,1/2,1/4,1/8,1/16}> Normal Type lock
+// slider3:2<0,4,1{off,1/2,1/4,1/8,1/16}> Normal Type lock
 slider4:0<0,127,1> Aftertouch
 slider5:100<10,100,10> Gate
 slider10:1<0,1,1{Off,On}> Sync to Beat
@@ -74,6 +90,9 @@ i_noteCnt               = 0;
 i_AT                    = 0;
 active                  = 0;
 
+// rate as integer of a beat
+i_div =1;
+
 // List of notes that are pressed
 i_NotesPressedBit = 2; //Channel, Vel
 a_NotesPressed    = 0;
@@ -84,13 +103,16 @@ i_NotesOutBit     = 3; //Channel, Pit, Vel
 a_NotesOut        = a_NotesPressed + NUM_NOTES * i_NotesPressedBit;
 memset(a_NotesOut, 0, NUM_NOTES * i_NotesOutBit);
 
+
 @slider
 i_noteStart = 12*slider1;
+// Return to even notes from triplet if division is equal to slider3 value
+// slider3 ? i_divlock = 2 / (2 ^ (slider3 - 1)):16;
 i_AT = slider4;
 i_gate = slider5 / 100;
-
 b_sync = slider10;
 on = slider11;
+
 
 @block
 
@@ -115,17 +137,17 @@ while(midirecv(offset,msg1,msg2,msg3)) (
       s1 = 5;
       s2 = 0;
     );
-    pitch_diff == 4 ? (
+    pitch_diff == 5 ? (
       // Normal 1/16
       s1 = 6;
       s2 = 0;
     );
-    pitch_diff == 5 ? (
+    pitch_diff == 7 ? (
       // Normal 1/32
       s1 = 7;
       s2 = 0;
     );
-    pitch_diff == 7 ? (
+    pitch_diff == 9 ? (
       // Normal 1/64
       s1 = 8;
       s2 = 0;
@@ -135,44 +157,41 @@ while(midirecv(offset,msg1,msg2,msg3)) (
     pitch_diff == 1 ? (
       // Abnormal 1/4
       s1 = 4;
+      s2 = 1;
     );
     pitch_diff == 3 ? (
       // Abnormal 1/8
       s1 = 5;
+      s2 = 1;
     );
     pitch_diff == 6 ? (
       // Abnormal 1/16
       s1 = 6;
+      s2 = 1;
     );
     pitch_diff == 8 ? (
       // Abnormal 1/32
       s1 = 7;
+      s2 = 1;
     );
     pitch_diff == 10 ? (
       // Abnormal 1/64
       s1 = 8;
-    );
-    pitch_diff == 10 ? (
-      // Abnormal 1/64
-      s1 = 8;
-    );
-    pitch_diff == 9 ? (
-      // T
       s2 = 1;
     );
     pitch_diff == 11 ? (
-      // T
+      // D
       s2 = 2;
     );
 
     // rate as integer of a beat
     i_div = (16/(2 ^ s1));
     // Triplet or Normal
-    s2 == 1 ? i_div < i_divlock ? i_div *= 2/3;
+    // s2 == 1 ? i_div < i_divlock ? i_div *= 2/3;
+    s2 == 1 ? i_div *= 2/3;
     // Dotted
     s2 == 2 ? i_div *= 3/2;
     i_divGate = i_div * i_gate;
-    continue;
   );
   
 
