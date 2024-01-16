@@ -1,0 +1,885 @@
+desc:MIDI Velocity Curve GUI
+
+/* *********************************************
+Overview:
+    This JS FX changes Note On velocities, based on the values in the map
+    (the X-axis is the input velocity and the Y-axis is the output velocity),
+    helping deal with keyboards that do not easily send the full range of 
+    velocity values.
+
+    Received notes are displayed as horizontal bars, the velocity is shown 
+    by the horizontal length and the note pitch by the vertical position, so
+    the keyboard responsiveness can be assessed. 
+   
+Operation:
+    -- to set an output velocity for a single input velocity:
+        - click in the appropriate veloctiy column,
+        - or scroll the mouse-wheel over it.
+
+    -- to set an output velocity for consecutive input velocities:
+        - click and drag over them (slowly)
+
+    -- to set a linear ramp:
+        - from the current lowest map velocity to a new highest map velocity,
+          SHIFT+click to the right of the grid,
+        - from the current highest map velocity to a new lowest map velocity,
+          SHIFT+click to the right of the grid,
+        - from the current lowest map velocity to a new highest received velocity,
+          SHIFT+click just above the top of the grid.
+
+
+    -- to clear the displayed notes:
+        - SHIFT+click "Clear"
+
+    -- to clear the displayed notes 
+       when Play or Record starts (from Stopped):
+        - click the "Auto" box
+
+    -- to increase / decrease the colour density:
+        - drag the Sat(uration) value up / down,
+        - or scroll the mouse-wheel over it.
+
+    -- to increase / decrease the number of notes
+       considered for display:
+        - drag the Pop(ulation) value up /down,
+        - or scroll the mouse-wheel over it.
+
+    -- to show / hide the note tags on the notes:
+        - click the "Note tags" button
+
+Release notes:
+    a04 - prototype
+
+   **********************************************
+*/
+
+//options:want_all_kb
+
+in_pin:none
+out_pin:none
+
+// the sliders are for information only in the TCP, not for control
+
+slider1:-2<2,7,1>-Low octave
+slider2:9<0,9,1>-High octave
+slider3:65<20,100,5>-Colour Sat
+slider4:20<0,100,5>-Density
+slider5:0<0,1,1>-Note Tags
+slider6:10<0,100,5>-Held notes
+
+
+// ==========================================================
+@serialize
+// ==========================================================
+
+    store_01 = file_var(0, low_octave); 
+    store_02 = file_var(0, high_octave);
+    store_03 = file_var(0, sat_percent);
+    store_04 = file_var(0, tags);
+    store_05 = file_var(0, noof_displayed_notes); 
+    store_06 = file_var(0, noof_held_notes);
+    store_07 = file_var(0, auto_clear);
+      
+    file_mem(0, start_monitor_channels, end_monitor_channels - start_monitor_channels);
+    file_mem(0, start_vel_map, end_vel_map - start_vel_map);
+
+// ==========================================================
+@init
+// ==========================================================
+
+    ext_noinit = 1; // do not initialise on Start / Stop
+
+    NOTE_ON       =  9;
+    NOTE_OFF      =  8;
+    AFTERTOUCH    = 10;
+    CC_MSG        = 11;
+    PC_MSG        = 12;
+    CH_PRESS      = 13;
+    PITCH_WHEEL   = 14;
+    PITCH_BEND    = 14;
+    SYSEX_MSG     = 15;
+
+    ALL_NOTES_OFF = 123;
+
+    NO    =  0; 
+    YES   =  1;
+    EMPTY = -1;  
+    ANY   =  0;
+
+    STOPPED   = 0;
+    PLAYING   = 1;
+    RECORDING = 5;
+    
+    CC_HOLD     = 64;
+
+    first_time  = YES;
+    low_octave  = -2;
+    high_octave = 9;
+    sat_percent = 65;
+    noof_displayed_notes = 25-20;
+    noof_held_notes = 10-5;
+    filtered_channel = 1;
+
+//  Graphics positions
+    GRID_X    =  50;  GRID_Y   = 40;  GRID_H   = -1;  GRID_W  = 80 *8 +2;
+    CONTROLS_Y = -1;
+    INLED_X0  =  30;  INLED_Y0 = -1;  INLED_H  = 10;  INLED_W = 20;
+    CHSEL_X0  =  30;  CHSEL_Y0 = -1;  CHSEL_H  = 20;  CHSEL_W = CHSEL_H;
+
+    LO_X      = 605;  LO_Y     = -1;  LO_H     = 20;  LO_W    = 40;
+    HI_X      = 665;  HI_Y     = -1;  HI_H     = 20;  HI_W    = 40;
+
+    CLEAR_X   =  30;  CLEAR_Y  = -1;  CLEAR_H  = 20;  CLEAR_W = 56;
+    AUTOC_X   = 103;  AUTOC_Y  = -1;  AUTOC_H  = 16;  AUTOC_W = AUTOC_H;
+    SAT_X     = 168;  SAT_Y    = -1;  SAT_H    = 20;  SAT_W   = 80;
+    POP_X     = 260;  POP_Y    = -1;  POP_H    = 20;  POP_W   = 80;
+    HOLD_X    = 352;  HOLD_Y   = -1;  HOLD_H   = 20;  HOLD_W  = 80;
+    TAGS_X    = 605;  TAGS_Y   = -1;  TAGS_H   = 20;  TAGS_W  = 100;
+
+// 1115+ Per-channel filter
+    CHF_X     = 480;  CHF_Y    = -1;  CHF_H    = 20;  CHF_W   = 100;
+    LON_X     = 480;  LON_Y    = -1;  LON_H    = 20;  LON_W   = 40;
+    HIN_X     = 540;  HIN_Y    = -1;  HIN_H    = 20;  HIN_W   = 40;
+
+
+//  Mouse clicks
+    NO_CLICK    =  0;
+    CLICK       =  1;
+    SHIFT_CLICK =  9;
+    ALT_CLICK   = 17;
+
+//  Button Ids
+    GRID_ = 21;  CHSEL_ = 22;  CLEAR_ = 23;  AUTOC_ = 24;
+    SAT_  = 25;  POP_   = 26;  HELD_  = 27;  LOW_   = 28;  HIGH_ = 29;   
+    TAGS_ = 30;
+    CHF_  = 31;  LON_   = 32;  HIN_   = 33; 
+
+// Tag modes
+    TAG_PINPOINT = 0;  TAG_NAMES = 1;  TAG_VELOCITIES = 2;  TAG_NAME_VELS = 3;     
+
+// file handles
+    CHMAP_     = 0;
+ 
+    
+// ------------------------------------------------
+// ARRAYS
+// ------------------------------------------------
+
+    start_vel_map = 1024;
+        vel_map = start_vel_map;
+    end_vel_map = start_vel_map + 128;
+        idx = 0;
+        loop (128,
+            vel_map[idx] = idx;
+            idx +=1;
+        );
+    
+    noof_stored_notes = 100;
+    start_received_notes   = end_vel_map;
+        received_notenum   = start_received_notes;
+        received_notevel   = start_received_notes + noof_stored_notes;
+        received_notechan  = received_notevel     + noof_stored_notes;
+    end_received_notes     = start_received_notes + noof_stored_notes * 3;
+        memset(start_received_notes, EMPTY, noof_stored_notes * 3);
+
+    start_monitor_channels = end_received_notes;
+        monitor_channel    = start_monitor_channels;
+        channel_low_note   = start_monitor_channels + 17;
+        channel_high_note  = channel_low_note + 17; 
+    end_monitor_channels   = channel_high_note + 17;
+        memset(monitor_channel, 0, 17);                  // All channels, then 01 .... 16
+        monitor_channel[0] = 1;
+        memset(channel_low_note, 0, 17);
+        memset(channel_high_note, 127, 17);
+
+    start_channel_colours = end_monitor_channels;
+        channel_colour_R  = start_channel_colours;
+        channel_colour_G  = channel_colour_R + 16;
+        channel_colour_B  = channel_colour_G + 16;
+    end_channel_colours   = start_channel_colours +48;
+
+    start_note_names = end_channel_colours;
+    note_name = start_note_names;
+    end_note_names    = start_note_names + 24;
+        note_name[0]= $'C';  note_name[1]= $' ';
+        note_name[2]= $'C';  note_name[3]= $'#'; 
+        note_name[4]= $'D';  note_name[5]= $' ';
+        note_name[6]= $'D';  note_name[7]= $'#';
+        note_name[8]= $'E';  note_name[9]= $' '; 
+        note_name[10]=$'F';  note_name[11]=$' '; 
+        note_name[12]=$'F';  note_name[13]=$'#';
+        note_name[14]=$'G';  note_name[15]=$' ';;
+        note_name[16]=$'G';  note_name[17]=$'#';
+        note_name[18]=$'A';  note_name[19]=$' '; 
+        note_name[20]=$'A';  note_name[21]=$'#';
+        note_name[22]=$'B';  note_name[23]=$' '; 
+
+    FIRST_C = -2;
+
+
+// ------------------------------------------------------------------------
+function Xprint_note_name (Ppitch)
+// ------------------------------------------------------------------------
+local ( note_letter note_octave )
+(
+    note_letter = Ppitch % 12;
+    gfx_drawchar(note_name[note_letter*2]);
+    note_name[note_letter*2+1] == $'#' ?   gfx_drawchar($'#');
+    note_octave = floor(Ppitch /12) + FIRST_C;
+    gfx_drawnumber(note_octave,0);
+);
+
+
+// ==========================================================
+@slider
+// ==========================================================
+// the sliders are for information only in the TCP, not for control
+ 
+    temp = 1;
+
+//    low_octave      = slider1;
+//    high_octave     = slider2;
+//    sat_percent     = slider3;
+//    noof_displayed_notes = slider4;
+//    tags        = slider5;
+
+
+// ==========================================================
+@block
+// ==========================================================
+
+    beat_pos = beat_position;
+    beats_per_bar = ts_num;
+
+// ------------------------------------------------
+//  clear the display if the option is set and play has just  been started 
+// 1120 +
+    play_state > STOPPED && old_play_state == STOPPED ? (
+        old_play_state = play_state;
+        auto_clear ? (
+/*
+            idx = 0;
+            loop (noof_stored_notes,
+                received_notenum[idx] = EMPTY;
+                idx +=1;
+            );
+*/
+            memset(start_received_notes, EMPTY, noof_stored_notes * 3);
+            widx = 0; 
+            ridx = 0; rhidx =0;  
+        );
+    );
+    play_state == STOPPED ? old_play_state = play_state;
+        
+// ------------------------------------------------
+while(
+    midirecv(mpos, msg1, msg23) ? (
+        msg = (msg1 / 16) | 0;
+        note_num = msg23 & 127;
+        note_vel = (msg23 / 256) | 0;
+
+        note_on_rcvd = (msg == NOTE_ON && note_vel > 0);
+        note_off_rcvd = (msg == NOTE_OFF || (msg == NOTE_ON && note_vel == 0));
+        CC_rcvd = msg == CC_MSG; 
+        channelled_msg_rcvd = msg == PC_MSG || msg == AFTERTOUCH 
+                           || msg == CH_PRESS || msg == PITCH_BEND;
+        sys_rcvd = msg == SYSEX_MSG;
+        note_on_rcvd ? inChannel = 1 + msg1 - (msg * 16);    // 01 ... 16
+
+        note_on_rcvd && (monitor_channel[inChannel] == YES || monitor_channel[ANY] == YES) ? (
+            received_notenum[widx] = note_num;
+            received_notevel[widx] = note_vel;
+            received_notechan[widx] = inChannel;
+            widx +=1;
+            widx >= noof_stored_notes ? widx = 0;  
+        );
+
+        note_on_rcvd ? (
+            note_vel = vel_map[note_vel];
+            msg23 = note_vel * 256 + note_num;
+        );
+        midisend(mpos, msg1, msg23);
+    ); // end of the midirecv condition
+
+);
+
+
+// ==================================================================================
+//           D R A W   T H E    G R A P H I C S   E L E M E N T S
+// ==================================================================================
+
+@gfx 720 430
+
+// .... Compact version
+    compact_height = 690;
+    gfx_h < compact_height ? (
+        GRID_H = 256;
+        CONTROLS_Y = 340;
+    ):(
+        GRID_H = 512;
+        CONTROLS_Y = 590;    
+    );
+    INLED_Y0 = CONTROLS_Y;
+    CHSEL_Y0 = CONTROLS_Y +15;
+    CLEAR_Y  = CONTROLS_Y +55;
+    AUTOC_Y  = CONTROLS_Y +55 +2;
+    LO_Y     = CONTROLS_Y +15;
+    HI_Y     = CONTROLS_Y +15;
+
+    POP_Y    = CONTROLS_Y +15+40;
+    SAT_Y    = CONTROLS_Y +55;
+    TAGS_Y   = CONTROLS_Y +55;
+    HOLD_Y   = CONTROLS_Y +55; 
+    
+    CHF_Y    = CONTROLS_Y +15;
+    LON_Y    = CONTROLS_Y +55;
+    HIN_Y    = CONTROLS_Y +55;
+    
+
+// load the channel colours once
+    colours_loaded == NO ? (
+        colours_loaded = YES;
+        coordinatelist[0] =   0;
+        coordinatelist[1] =   0;
+        coordinatelist[2] =  16;
+        coordinatelist[3] =  10;
+        coordinatelist[4] = 200;
+        coordinatelist[5] =   0;
+        coordinatelist[6] =  16;
+        coordinatelist[7] =  16;
+        gfx_blitext(CHMAP_,coordinatelist,0);
+    
+        idx = 0;
+        gfx_x =200; gfx_y =0;
+        loop(16,
+            gfx_getpixel(channel_colour_R[idx], channel_colour_G[idx], channel_colour_B[idx]);
+            gfx_x +=1;
+            idx +=1;
+        );
+    );
+
+
+// ------------------------------------------------
+//  draw the background 
+
+    gfx_r=0.10; gfx_g=0.10; gfx_b=0.15;  
+    gfx_x = 0; gfx_y = 0;
+    gfx_a =1.00;
+    gfx_rectto(gfx_w, gfx_h);
+
+// ----------------------------
+// plug-in title
+    gfx_r=0.85; gfx_g=0.65; gfx_b=0.20;
+    gfx_x = 20; gfx_y = 5;
+    gfx_printf("MIDI Velocity Warper (a04)");
+
+//  background banner for the controls
+    gfx_r=0.15; gfx_g=0.15; gfx_b=0.20; gfx_a=1.0; 
+    gfx_x = 0; gfx_y = CONTROLS_Y -10;
+    gfx_rectto(720, gfx_y +94);
+
+
+
+// ----------------------------------------------------
+// draw the grid
+
+    noof_octaves = high_octave - low_octave;
+    column_width = floor(55 / noof_octaves);
+// 1115 + kludge
+column_width == 11 ? column_width = 10;
+    bar_width = column_width -1;
+
+// .... input velocity dividers (vertical lines)
+    gfx_x = GRID_X +2;
+    gfx_y = GRID_Y;
+    idx = 0;
+    loop(9,
+        gfx_r=0.35; gfx_g=0.35; gfx_b=0.40;
+        gfx_lineto(gfx_x, GRID_Y +GRID_H -2);
+
+        gfx_y +=10;
+        gfx_r=0.55; gfx_g=0.55; gfx_b=0.60;
+
+        idx == 8 ? gfx_x -=8;
+        gfx_printf("%d", min(max(1,idx *16),127));
+        idx == 0 ? gfx_x +=8;
+        idx == 7 ? gfx_x -=8;
+        gfx_x += 64;
+        gfx_y = GRID_Y;
+        idx +=1;
+    );
+
+// Output velocity dividers (horizontal lines)
+    gfx_x = GRID_X -32;
+    gfx_y = GRID_Y;
+    idx = 0;
+    loop(9,
+        gfx_r=0.55; gfx_g=0.55; gfx_b=0.60;
+        gfx_y -=4;
+        idx > 0 ? (
+           gfx_printf("%3d", (max(1, (8 - idx) *16)));
+        ):( 
+            gfx_y +=4;   gfx_printf("%3d",127);
+            gfx_y -=4;
+        );
+
+        gfx_r=0.35; gfx_g=0.35; gfx_b=0.40;
+        gfx_y +=4;
+        gfx_x +=8;
+        gfx_lineto(gfx_x +GRID_W, gfx_y);
+
+        gfx_x = GRID_X -32;
+        gfx_h < compact_height ? gfx_y += 32 : gfx_y += 64;
+        idx +=1;
+    );
+
+// .... draw the border
+
+    gfx_r=0.85; gfx_g=0.45; gfx_b=0.00;
+    gfx_x = GRID_X; gfx_y = GRID_Y;
+    
+    gfx_lineto(gfx_x + GRID_W, gfx_y);
+    gfx_lineto(gfx_x, gfx_y +GRID_H +2);
+    gfx_lineto(GRID_X, gfx_y);
+    gfx_lineto(gfx_x, GRID_Y);
+    
+    gfx_x = GRID_X+1; gfx_y = GRID_Y+1;
+    gfx_lineto(gfx_x + GRID_W-2, gfx_y);
+    gfx_lineto(gfx_x, gfx_y +GRID_H -2+2);
+    gfx_lineto(GRID_X+1, gfx_y);
+    gfx_lineto(gfx_x, GRID_Y+1);
+
+// .... draw the map
+    gfx_x = GRID_X+3+3;
+    gfx_r = 1.00; gfx_g = 0.80; gfx_b = 0.50;  // light orange
+    idx =1;
+    loop(127,
+        idx % 16 == 0 ? gfx_g = 0.00 : gfx_g = 0.80;
+        gfx_y = GRID_Y + GRID_H  - vel_map[idx]/128* GRID_H;
+        gfx_rect(gfx_x, gfx_y, 3, 3);
+gfx_a = 0.12;
+gfx_g = 0.80;
+save_gfxx = gfx_x; save_gfxy = gfx_y;
+gfx_rectto(gfx_x+3, GRID_Y + GRID_H -2);  
+gfx_x =save_gfxx; gfx_y = save_gfxy;
+gfx_a = 1.00;
+        gfx_x +=5; gfx_y -=GRID_H / 128;
+        idx +=1;
+    ); 
+
+// ---------------------------------------------------
+// display the notes
+    ridx = widx - noof_displayed_notes;
+    ridx < 0 ? ridx += noof_stored_notes;
+    loop(noof_displayed_notes,
+        rcvd_note = received_notenum[ridx];
+        rcvd_channel = received_notechan[ridx];
+
+/*rcvd_note >= channel_low_note[rcvd_channel]
+&& rcvd_note <= channel_high_note[rcvd_channel]
+&&
+*/
+        rcvd_note > EMPTY ? (
+            octave = floor(rcvd_note / 12);
+            (octave -2) >= low_octave && (octave -2) <= (high_octave-1) ? (
+                chc_idx = received_notechan[ridx]-1;
+                gfx_r = channel_colour_R[chc_idx];
+                gfx_g = channel_colour_G[chc_idx];
+                gfx_b = channel_colour_B[chc_idx];
+                gfx_a = sat_percent / 100;
+
+                gfx_r =0; gfx_g = 0.70;
+                gfx_x = GRID_X;
+                gfx_y = GRID_Y + GRID_H -1 - rcvd_note * (gfx_h < compact_height ? 2 : 4);
+                gfx_rectto(MIN(GRID_X + GRID_W,gfx_x +received_notevel[ridx] *5), gfx_y + bar_width);
+
+                gfx_a =0.80;
+                gfx_x -=20; gfx_y +=8;
+                gfx_r = 0.70; gfx_g = 0.70; gfx_b = 0.80;
+
+                tags == TAG_NAMES ? (
+                    Xprint_note_name(rcvd_note);
+                ):
+                tags == TAG_VELOCITIES ? (
+                    gfx_drawnumber(received_notevel[ridx],0);
+                ):
+                tags == TAG_NAME_VELS ? (
+                    Xprint_note_name(rcvd_note); 
+                    gfx_drawchar($'/');
+                    gfx_drawnumber(received_notevel[ridx],0);
+                );
+            );
+        );
+        ridx +=1;
+        ridx >= noof_stored_notes ? ridx = 0;
+    );
+    gfx_a =1.00;
+
+// ---------------------------------------------------
+// display the velocity map for the hovered input velocity
+    (mouse_x   >= GRID_X +5 && mouse_x <= (GRID_X + GRID_W -5)
+    && mouse_y >= GRID_Y+3 && mouse_y <= (GRID_Y + GRID_H -5)) ? (
+        GRID_invel = floor((mouse_x - GRID_X) / (GRID_W -2) * 128);
+        gfx_r=0.75; gfx_g=0.75; gfx_b=0.85;
+        gfx_x = mouse_x +16; gfx_y = mouse_y;
+        gfx_printf("In  %d", GRID_invel);
+        gfx_x = mouse_x +16; gfx_y +=10;
+        gfx_printf("Out %d", vel_map[GRID_invel]);
+    );
+
+
+// ------------------------------------------------
+// display the Clear Display button
+
+    gfx_x = CLEAR_X; gfx_y = CLEAR_Y;    
+    mouseon == CLEAR_ ? (
+        gfx_r=0.85; gfx_g=0.45; gfx_b=0.00;
+        gfx_rectto(gfx_x + CLEAR_W, gfx_y + CLEAR_H);
+        gfx_r=0.15; gfx_g=0.15; gfx_b=0.20;
+    ):(
+        gfx_r = 0.70; gfx_g = 0.30; gfx_b = 0.30;
+        gfx_rectto(gfx_x + CLEAR_W, gfx_y + CLEAR_H);
+        gfx_r=0.15; gfx_g=0.15; gfx_b=0.20;
+    );
+        gfx_x = CLEAR_X +4; gfx_y = CLEAR_Y +6; 
+        gfx_printf("Clear");
+        gfx_x +=2; gfx_y = CLEAR_Y+3; gfx_drawchar($'^'); 
+        gfx_x -=8; gfx_y = CLEAR_Y+8; gfx_drawchar($'|'); 
+
+// 1120 .... and the Auto-clear checkbox
+    gfx_r=0.60; gfx_g=0.60; gfx_b=0.70;
+    gfx_x = AUTOC_X -8; gfx_y = AUTOC_Y -12;
+    gfx_printf("Auto");
+
+    gfx_x = AUTOC_X; gfx_y = AUTOC_Y;;
+    gfx_rectto(gfx_x + AUTOC_W, gfx_y + AUTOC_W);
+    gfx_r=0.15; gfx_g=0.15; gfx_b=0.20;
+    gfx_x -=1; gfx_y -=1;
+    gfx_rectto(gfx_x - AUTOC_W +2, gfx_y - AUTOC_H +2);
+
+    auto_clear == YES ? (
+        gfx_r=0.65; gfx_g=0.45; gfx_b=0.00;
+        gfx_x = AUTOC_X +3; gfx_y = AUTOC_Y +3;
+        gfx_rectto(gfx_x + AUTOC_W -6, gfx_y + AUTOC_H -6);
+    );
+    
+
+// ------------------------------------------------
+// display the Population button
+
+    gfx_r=0.25; gfx_g=0.25; gfx_b=0.28;
+    gfx_x = POP_X; gfx_y = POP_Y;    
+    gfx_rectto(gfx_x + POP_W, gfx_y + POP_H);
+
+    gfx_r=0.70; gfx_g=0.70; gfx_b=0.80;
+    gfx_x = POP_X +14; gfx_y = POP_Y +6;
+    noof_displayed_notes == 100 ? gfx_x -=4;
+    gfx_printf("Pop:"); gfx_x +=4;
+    noof_displayed_notes < 10 ? gfx_drawchar($'0');
+    gfx_drawnumber(noof_displayed_notes,0); 
+
+// ------------------------------------------------
+// display the Saturation button 
+
+    gfx_r=0.25; gfx_g=0.25; gfx_b=0.28;
+    gfx_x = SAT_X; gfx_y = SAT_Y;    
+    gfx_rectto(gfx_x + SAT_W, gfx_y + SAT_H);
+
+    gfx_r=0.70; gfx_g=0.70; gfx_b=0.80;
+    gfx_x = SAT_X +10; gfx_y = SAT_Y +6;
+    sat_percent == 100 ? gfx_x -=4;
+    gfx_printf("Sat:"); gfx_x +=4;
+    sat_percent < 10 ? gfx_drawchar($'0');
+    gfx_drawnumber(sat_percent,0); gfx_drawchar($'%');
+    
+// ------------------------------------------------
+// display the Note Name / Velocity tags button 
+
+    tags > NO ? (
+        gfx_r=0.85; gfx_g=0.45; gfx_b=0.00;        
+        gfx_x = TAGS_X; gfx_y = TAGS_Y;    
+        gfx_rectto(gfx_x + TAGS_W, gfx_y + TAGS_H);
+
+        gfx_r=0.15; gfx_g=0.15; gfx_b=0.20;
+        gfx_y = TAGS_Y +6;
+        tags == TAG_NAMES      ? ( gfx_x = TAGS_X +30; gfx_printf("Names"); );
+        tags == TAG_VELOCITIES ? ( gfx_x = TAGS_X +10; gfx_printf("Velocities"); );
+        tags == TAG_NAME_VELS  ? ( gfx_x = TAGS_X +10; gfx_printf("Names/Vels"); );
+    ):(
+        gfx_r=0.25; gfx_g=0.25; gfx_b=0.28;
+        gfx_x = TAGS_X; gfx_y = TAGS_Y;    
+        gfx_rectto(gfx_x + TAGS_W, gfx_y + TAGS_H);
+
+        gfx_r=0.75; gfx_g=0.75; gfx_b=0.85;
+        gfx_x = TAGS_X +14; gfx_y = TAGS_Y +6;
+        gfx_printf("Note tags");     
+    );
+
+   
+
+// ==================================================================================
+//           H A N D L E   T H E   M O U S E   C L I C K S
+// ==================================================================================
+
+// detect which button has been clicked on
+
+    (mouse_cap == CLICK || mouse_cap == ALT_CLICK || mouse_cap == SHIFT_CLICK) ? (
+        mouseon == 0 && found == NO ? (
+
+// ------------------------------------------------
+// .... Shift + click the Clear Display button
+            mouse_cap == SHIFT_CLICK ? (
+                (mouse_x >= CLEAR_X && mouse_x<= (CLEAR_X + CLEAR_W)
+                && mouse_y >= CLEAR_Y && mouse_y <= (CLEAR_Y + CLEAR_H)) ? (
+                    mouseon = CLEAR_;
+
+                    memset(start_received_notes, EMPTY, noof_stored_notes * 3);
+                    widx = 0; 
+                    ridx = 0; rhidx =0;  
+                    found = YES;  
+                );
+            );
+
+// ------------------------------------------------
+// 1120 + 
+// .... Toggle the Auto-clear on Play Starting button
+
+            mouse_cap == CLICK ? (
+                (mouse_x   >= AUTOC_X && mouse_x <= (AUTOC_X + AUTOC_W)
+                && mouse_y >= AUTOC_Y && mouse_y <= (AUTOC_Y + AUTOC_H)) ? (
+                    mouseon = AUTOC_;
+                    auto_clear = YES - auto_clear;
+                    found = YES;  
+                );
+            );
+
+
+// ------------------------------------------------
+// .... click the Saturation button
+            (mouse_x >= SAT_X && mouse_x<= (SAT_X + SAT_W)
+            && mouse_y >= SAT_Y && mouse_y <= (SAT_Y + SAT_H)) ? (
+                mouseon = SAT_;
+                found = YES;  
+            );
+
+// ------------------------------------------------
+// .... click the Population button
+            (mouse_x >= POP_X && mouse_x<= (POP_X + POP_W)
+            && mouse_y >= POP_Y && mouse_y <= (POP_Y + POP_H)) ? (
+                mouseon = POP_;
+                found = YES;  
+            );
+
+// ------------------------------------------------
+// .... click the Note Name / Velocity tags button
+
+            (mouse_x >= TAGS_X && mouse_x<= (TAGS_X + TAGS_W)
+            && mouse_y >= TAGS_Y && mouse_y <= (TAGS_Y + TAGS_H)) ? (
+                mouseon = TAGS_;
+                tags +=1;
+                tags > TAG_NAME_VELS ? tags = NO;
+                found = YES;  
+            );
+
+
+// ------------------------------------------------
+// .... Click or dreag in the map
+
+            (mouse_x   >= GRID_X +5 && mouse_x <= (GRID_X + GRID_W -5)
+            && mouse_y >= GRID_Y+3 && mouse_y <= (GRID_Y + GRID_H -5)) ? (
+                
+                mouse_cap == CLICK ? (
+                    GRID_invel = floor((mouse_x - GRID_X) / (GRID_W -2) * 128);
+                    vel_map[GRID_invel] = 127 - floor((mouse_y - GRID_Y) / GRID_H *128);
+                    found = YES;  
+                );
+
+                mouse_cap == SHIFT_CLICK ? (
+                    mouseon = GRID_;
+                    found = YES;  
+                );
+
+            );
+// ------------------------------------------------
+// 0113 + 
+// .... Click on the map boundaries
+
+            mouse_cap == SHIFT_CLICK ? (
+
+// ramp to max output
+                mouse_x  > GRID_X + GRID_W +5 ? (
+                    min_outvel = vel_map[1];
+                    max_outvel = max(1,min(127, 127 - floor((mouse_y - GRID_Y) / GRID_H * 127)));
+az_vel = mouse_y - GRID_Y;
+                    found = YES;  
+
+                    idx = 1;
+                    loop(127,
+                        vel_map[idx] = floor((max_outvel - min_outvel) * idx / 127) + min_outvel;
+                        idx +=1;
+                    );
+                );
+            
+// ramp from min output
+                mouse_x  < GRID_X -5 ? (
+                    min_outvel = max(1,min(127,127 - floor((mouse_y - GRID_Y) / GRID_H *127)));
+                    max_outvel = vel_map[127];
+                    found = YES;  
+
+                    idx = 1;
+                    loop(127,
+                        vel_map[idx] = floor((max_outvel - min_outvel) * idx / 127) + min_outvel;
+                        idx +=1;
+                    );
+                );
+
+// ramp to max input
+                mouse_x > GRID_X && mouse_x  < GRID_X + GRID_W && mouse_y < GRID_Y-7 ? (
+                    min_invel = 1;
+                    max_invel = floor((mouse_x - GRID_X) / (GRID_W -2) * 127);
+                    found = YES;
+
+                    idx = 2;
+                    loop(126,
+                        vel_map[idx] = min(127, floor((127-vel_map[1])/max_invel * idx +  vel_map[1]));
+                        idx +=1;
+                    );
+                );
+            );
+
+// ----------------
+        );     // end of the "mouseon and found" test 
+
+
+
+// ==================================================================================
+//           H A N D L E   T H E   M O U S E   D R A G S
+// ==================================================================================
+
+// ------------------------------------------------
+// handle clicking /dragging within the map
+
+        found == YES && 
+        mouseon == GRID_ ? (
+            GRID_invel = min(127,max(1,floor((mouse_x - GRID_X) / (GRID_W -2) * 128)));
+            vel_map[GRID_invel] = min(127, max(1, 127 - floor((mouse_y - GRID_Y) / GRID_H *128)));
+            first_time == YES ?  first_time = NO;
+        ); 
+        
+
+// ------------------------------------------------
+// .... the Population button
+
+        found == YES && mouseon == POP_ ? (
+            mouse_cap == CLICK ? ( 
+                mouse_y > saveY ? noof_displayed_notes = max(noof_displayed_notes -=1, 1-1);
+                mouse_y < saveY ? noof_displayed_notes = min(noof_displayed_notes +=1, noof_stored_notes);
+                saveY = mouse_y;
+            ); 
+            mouse_cap == ALT_CLICK ? ( 
+                mouse_y > saveY ? noof_displayed_notes = max(noof_displayed_notes -=5, 1-1);
+                mouse_y < saveY ? noof_displayed_notes = min(noof_displayed_notes +=5, noof_stored_notes);
+                saveY = mouse_y;
+            ); 
+            first_time == YES ?  first_time = NO;
+        ); // end of "found == YES && MOUSEON == LOW_ ?" test
+        
+// ------------------------------------------------
+// .... the Held Notes button
+
+        found == YES && mouseon == HELD_ ? (
+            mouse_cap == CLICK ? ( 
+                mouse_y > saveY ? noof_held_notes = max(noof_held_notes -=1, 1-1);
+                mouse_y < saveY ? noof_held_notes = min(noof_held_notes +=1, noof_stored_notes);
+                saveY = mouse_y;
+            ); 
+            mouse_cap == ALT_CLICK ? ( 
+                mouse_y > saveY ? noof_held_notes = max(noof_held_notes -=5, 1-1);
+                mouse_y < saveY ? noof_held_notes = min(noof_held_notes +=5, noof_stored_notes);
+                saveY = mouse_y;
+            ); 
+            first_time == YES ?  first_time = NO;
+        ); // end of "found == YES && MOUSEON == LOW_ ?" test
+
+// ------------------------------------------------
+// handle clicking /dragging the Saturation button
+
+        found == YES && mouseon == SAT_ ? (
+            mouse_cap == CLICK ? ( 
+                mouse_y > saveY ? sat_percent = max(sat_percent -=5, 20);
+                mouse_y < saveY ? sat_percent = min(sat_percent +=5, 100);
+                saveY = mouse_y;
+            ); 
+            first_time == YES ?  first_time = NO;
+        ); // end of "found == YES && MOUSEON == LOW_ ?" test
+        
+
+// ------------------------------------------------
+// handle clicking /dragging the Channel Filter and Range controls
+
+        found == YES && mouseon == CHF_ ? (
+            mouse_cap == CLICK ? ( 
+                mouse_y > saveY ? filtered_channel = max(filtered_channel -=1, 0);   // 0 = All channels
+                mouse_y < saveY ? filtered_channel = min(filtered_channel +=1, 16);
+                saveY = mouse_y;
+            ); 
+            first_time == YES ?  first_time = NO;
+        ); // end of "found == YES && MOUSEON == LOW_ ?" test
+
+// -------------------------------------------------
+    ):(
+        mouseon = 0;       // end of mouse_cap" test, handling the mouse cllick
+        found = NO;
+        first_time = YES;
+    );
+
+// ==================================================================================
+//           H A N D L E   T H E   M O U S E W H E E L   S C R O L L S   
+// ==================================================================================
+
+    mouse_wheel != saveMW && mouse_cap == NO_CLICK && found == NO ? (
+
+// ----------------------------------------
+// .... over the Population control
+
+        (mouse_x >= POP_X && mouse_x<= (POP_X + POP_W)
+        && mouse_y >= POP_Y && mouse_y <= (POP_Y + POP_H)) ? (
+            mouse_wheel > saveMW ? noof_displayed_notes = max(noof_displayed_notes -= 5,10-10); 
+            mouse_wheel < saveMW ? noof_displayed_notes = min(noof_displayed_notes += 5,noof_stored_notes); 
+            saveMW = mouse_wheel;
+        );
+// ----------------------------------------
+// .... over the Saturation percentage control
+
+        (mouse_x >= SAT_X && mouse_x<= (SAT_X + SAT_W)
+        && mouse_y >= SAT_Y && mouse_y <= (SAT_Y + SAT_H)) ? (
+            mouse_wheel > saveMW ? sat_percent = max(sat_percent -= 5,20); 
+            mouse_wheel < saveMW ? sat_percent = min(sat_percent += 5,100); 
+            saveMW = mouse_wheel;
+        );
+
+// ----------------------------------------
+// .... over the grid
+
+        (mouse_x   >= GRID_X +5 && mouse_x <= (GRID_X + GRID_W -5)
+        && mouse_y >= GRID_Y+3 && mouse_y <= (GRID_Y + GRID_H -5)) ? (
+            GRID_invel = floor((mouse_x - GRID_X) / (GRID_W -2) * 128);
+            mouse_wheel > saveMW ? vel_map[GRID_invel] = max(vel_map[GRID_invel] -=2,1);
+            mouse_wheel < saveMW ? vel_map[GRID_invel] = min(vel_map[GRID_invel] +=2,127);
+            saveMW = mouse_wheel;
+        );
+
+    );
+            
+// ==========================================================
+//                     = = = = E N D = = = = =
+// ==========================================================
+
+/*
+gfx_r = 0.50; gfx_g = 0.50; gfx_b = 0.75; // grey-blue
+gfx_r = 0.70; gfx_g = 0.30; gfx_b = 0.30; // matt red
+gfx_r = 0.80; gfx_g = 0.50; gfx_b = 0.20; // orange
+gfx_r = 1.00; gfx_g = 0.80; gfx_b = 0.50;  // light orange
+*/
+
+
